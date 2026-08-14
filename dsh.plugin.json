@@ -1,0 +1,12 @@
+{
+  "name": "kaori-preview",
+  "description": "Kaori 文件预览系统：文件树 + 文本/代码/Markdown/图片预览",
+  "version": "0.1.0",
+  "entry": {
+    "name": "kaori-preview",
+    "inject": []
+  },
+  "client": {
+    "platform": "web"
+  }
+}

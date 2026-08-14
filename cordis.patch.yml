@@ -1,0 +1,6 @@
+# Kaori Preview bundle layer: mount the file-preview service into the profile tree.
+- insert:
+    - id: kaori-preview
+      name: 'kaori-preview'
+      config:
+        maxReadBytes: 262144
