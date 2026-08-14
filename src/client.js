@@ -542,11 +542,11 @@ function startUI(rpcCall, ctx, sessionInfo) {
         treeEl.innerHTML = '<div class="kp-error">' + escapeHtml(res.error) + '</div>';
         return;
       }
-      renderTree(res.entries || []);
+      renderTree(res.entries || [], res.truncated);
     });
   }
 
-  function renderTree(entries) {
+  function renderTree(entries, truncated) {
     treeEl.innerHTML = '';
     if (!entries.length) {
       treeEl.innerHTML = '<div class="kp-empty">工作区为空</div>';
@@ -560,7 +560,9 @@ function startUI(rpcCall, ctx, sessionInfo) {
       var cur = '';
       for (var i = 0; i < parts.length; i++) {
         cur = cur ? cur + '/' + parts[i] : parts[i];
-        if (i === parts.length - 1) {
+        // 目录条目（服务端返回 isDir）也必须建节点、绝不能进 files——
+        // 否则每个文件夹都会多出一行"幽灵文件"（点它还会报 EISDIR 错误）
+        if (i === parts.length - 1 && !e.isDir) {
           parent.files.push({ name: parts[i], path: cur });
         } else {
           if (!map[cur]) {
@@ -588,6 +590,13 @@ function startUI(rpcCall, ctx, sessionInfo) {
       return html;
     }
     treeEl.innerHTML = nodeHtml(root, 0);
+    if (truncated) {
+      var tip = document.createElement('div');
+      tip.className = 'kp-empty';
+      tip.style.padding = '10px 12px';
+      tip.textContent = '⚠ 目录过深或文件过多，列表已截断';
+      treeEl.appendChild(tip);
+    }
     treeEl.querySelectorAll('.kp-file').forEach(function (el) {
       el.addEventListener('click', function () {
         treeEl.querySelectorAll('.kp-file').forEach(function (x) { x.classList.remove('active'); });
