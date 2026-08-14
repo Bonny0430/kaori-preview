@@ -76,7 +76,9 @@ var CSS_TEXT = String.raw`
 .kaori-preview-panel{position:fixed;top:0;right:0;bottom:0;width:min(640px,46vw);z-index:1200;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l2);box-shadow:-8px 0 24px rgba(26,26,46,.18);transform:translateX(105%);transition:transform .22s ease;font-family:var(--dsw-font-family,system-ui)}
 .kaori-preview-panel.open{transform:translateX(0)}
 .kp-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--dsw-alias-border-l2);flex:none;background:var(--dsw-alias-bg-layer-1)}
+.kp-title-wrap{display:flex;flex-direction:column;gap:2px;min-width:0}
 .kp-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.kp-path{font-size:11px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kp-close{width:26px;height:26px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:13px}
 .kp-close:hover{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-state-business-primary)}
 .kp-body{display:flex;flex:1;min-height:0}
@@ -155,6 +157,7 @@ function startUI(rpcCall, ctx, sessionInfo) {
   var viewEl = null;
   var currentSessionId = null;
   var currentCwd = null;
+  var currentRootPath = null;
 
   // ========== 工具 ==========
   function ready(fn) {
@@ -500,7 +503,10 @@ function startUI(rpcCall, ctx, sessionInfo) {
     panel.id = 'kaori-preview-panel';
     panel.innerHTML =
       '<div class="kp-header">' +
-      '  <span class="kp-title">📂 文件预览</span>' +
+      '  <div class="kp-title-wrap">' +
+      '    <span class="kp-title">📂 文件预览</span>' +
+      '    <span class="kp-path" id="kaori-preview-path" title=""></span>' +
+      '  </div>' +
       '  <button class="kp-close" type="button" title="关闭">✕</button>' +
       '</div>' +
       '<div class="kp-body">' +
@@ -541,6 +547,12 @@ function startUI(rpcCall, ctx, sessionInfo) {
       if (res.error) {
         treeEl.innerHTML = '<div class="kp-error">' + escapeHtml(res.error) + '</div>';
         return;
+      }
+      // 显示当前根目录路径（服务端返回的 cwd），让用户一眼确认看的是哪个文件夹
+      if (res.cwd) {
+        currentRootPath = res.cwd;
+        var pathEl = panel && panel.querySelector('#kaori-preview-path');
+        if (pathEl) { pathEl.textContent = res.cwd; pathEl.title = res.cwd; }
       }
       renderTree(res.entries || [], res.truncated);
     });
@@ -589,7 +601,14 @@ function startUI(rpcCall, ctx, sessionInfo) {
       });
       return html;
     }
-    treeEl.innerHTML = nodeHtml(root, 0);
+    // 根目录行：显示当前工作区文件夹名，明确树的根
+    var rootRow = '';
+    if (currentRootPath) {
+      var rootName = currentRootPath.split(/[\\/]/).filter(Boolean).pop() || currentRootPath;
+      rootRow = '<div class="kp-dir kp-root" style="padding-left:4px;font-weight:700">' +
+        '<span class="kp-dir-name">📁 ' + escapeHtml(rootName) + '</span></div>';
+    }
+    treeEl.innerHTML = rootRow + nodeHtml(root, 0);
     if (truncated) {
       var tip = document.createElement('div');
       tip.className = 'kp-empty';
