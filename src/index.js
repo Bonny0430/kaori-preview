@@ -21,7 +21,6 @@ export const inject = ['connection', 'sessions'];
 
 export const Config = z.object({
   maxReadBytes: z.natural().min(1).default(262144),
-  maxEntries: z.natural().min(1).default(2000),
   ignoreDirs: z.array(z.string()).default(['.git', 'node_modules', '.dsh', '.cache', '.claude', '.codex', '.cursor', '.vscode', 'backup']),
   imageExts: z.array(z.string()).default(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp']),
   textExts: z.array(z.string()).default(['.md', '.txt', '.json', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.css', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml', '.ini', '.sh', '.ps1', '.bat', '.cmd', '.sql', '.log', '.csv', '.tsv', '.env', '.gitignore', '.dockerignore', '.editorconfig', '.npmrc', '.gitattributes']),
@@ -36,7 +35,7 @@ function normalizeSafe(cwd, rel) {
   if (typeof rel !== 'string') {
     throw new Error('invalid path: empty');
   }
-  // 空 rel 表示根目录（walkDir 以 '' 列 cwd 本身），直接返回 cwd
+  // 空 rel 表示根目录（listOneDir 以 '' 列 cwd 本身），直接返回 cwd
   if (rel.length === 0) return cwd;
   // 仅允许相对路径（不含盘符/绝对路径/..）
   if (path.isAbsolute(rel) || rel.includes('..')) {
@@ -62,44 +61,34 @@ function isText(name, cfg) {
   return cfg.textExts.includes(ext) || ext === '';
 }
 
-function fileEntry(abs, cwd, dirent) {
-  const rel = path.relative(cwd, abs).split(path.sep).join('/');
-  return {
-    name: dirent.name,
-    path: rel,
-    isDir: dirent.isDirectory(),
-    isFile: dirent.isFile()
-  };
-}
-
-async function walkDir(cwd, rel, depth, out, signal, cfg) {
-  if (out.length >= cfg.maxEntries) return { truncated: true };
-  if (depth > 6) return { truncated: true };
+/**
+ * 列出单个目录的直接子项（懒加载：客户端展开某个文件夹时才调用）。
+ * 不再递归遍历——展开哪个目录就列哪个目录，天然没有深度/条目数上限问题。
+ */
+async function listOneDir(cwd, rel, cfg) {
   const abs = normalizeSafe(cwd, rel);
-  let entries;
+  let dirents;
   try {
-    entries = await fsp.readdir(abs, { withFileTypes: true });
-  } catch {
-    return { truncated: false };
+    dirents = await fsp.readdir(abs, { withFileTypes: true });
+  } catch (e) {
+    throw new Error(`cannot read directory: ${e?.code ?? e?.message ?? String(e)}`);
   }
-  entries.sort((a, b) => {
-    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+  const out = [];
+  for (const d of dirents) {
+    if (d.name.startsWith('.')) continue; // 隐藏文件/目录默认不显示
+    if (d.isDirectory() && cfg.ignoreDirs.includes(d.name)) continue;
+    out.push({
+      name: d.name,
+      path: rel ? `${rel}/${d.name}` : d.name,
+      isDir: d.isDirectory(),
+      isFile: d.isFile()
+    });
+  }
+  out.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
-  for (const e of entries) {
-    if (out.length >= cfg.maxEntries) return { truncated: true };
-    signal?.throwIfAborted?.();
-    if (e.name.startsWith('.')) continue; // 隐藏文件默认不显示
-    if (e.isDirectory()) {
-      if (cfg.ignoreDirs.includes(e.name)) continue;
-      out.push(fileEntry(path.join(abs, e.name), cwd, e));
-      const sub = await walkDir(cwd, rel ? `${rel}/${e.name}` : e.name, depth + 1, out, signal, cfg);
-      if (sub.truncated) return { truncated: true };
-    } else if (e.isFile()) {
-      out.push(fileEntry(path.join(abs, e.name), cwd, e));
-    }
-  }
-  return { truncated: out.length >= cfg.maxEntries };
+  return out;
 }
 
 async function readTextFile(abs, maxBytes) {
@@ -169,9 +158,9 @@ export function apply(ctx, config) {
       if (!cwd) throw new Error('session has no workspace directory');
       switch (endpoint) {
         case 'listDir': {
-          const out = [];
-          const { truncated } = await walkDir(cwd, '', 0, out, signal, resolved);
-          return { ok: true, value: { entries: out, cwd, truncated } };
+          const rel = typeof payload.path === 'string' ? payload.path : '';
+          const entries = await listOneDir(cwd, rel, resolved);
+          return { ok: true, value: { entries, cwd, path: rel } };
         }
         case 'stat': {
           const abs = normalizeSafe(cwd, payload.path);

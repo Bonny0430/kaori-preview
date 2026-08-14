@@ -87,6 +87,9 @@ var CSS_TEXT = String.raw`
 .kp-dir,.kp-file{display:flex;align-items:center;gap:5px;padding:3px 8px;font-size:12px;line-height:20px;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kp-dir{color:var(--dsw-alias-label-primary);font-weight:500}
 .kp-dir-name{font-size:12px}
+.kp-dir-arrow{width:12px;flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary)}
+.kp-dir:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.kp-root{cursor:default}
 .kp-file:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .kp-file.active{background:var(--dsw-alias-state-business-tertiary);color:var(--dsw-alias-state-business-primary)}
 .kp-file-icon{flex:none}
@@ -539,11 +542,17 @@ function startUI(rpcCall, ctx, sessionInfo) {
     else openPanel();
   }
 
-  // ========== 文件树 ==========
+  // ========== 文件树（懒加载 + 可折叠）==========
+  // dirCache: 目录路径 -> 子项数组（已加载缓存）；expanded: 目录路径 -> 是否展开
+  var dirCache = {};
+  var expanded = {};
+
   function refreshTree() {
     if (!treeEl) return;
+    dirCache = {};
+    expanded = {};
     treeEl.innerHTML = '<div class="kp-loading">加载中…</div>';
-    previewRpc('listDir', {}).then(function (res) {
+    previewRpc('listDir', { path: '' }).then(function (res) {
       if (res.error) {
         treeEl.innerHTML = '<div class="kp-error">' + escapeHtml(res.error) + '</div>';
         return;
@@ -554,53 +563,40 @@ function startUI(rpcCall, ctx, sessionInfo) {
         var pathEl = panel && panel.querySelector('#kaori-preview-path');
         if (pathEl) { pathEl.textContent = res.cwd; pathEl.title = res.cwd; }
       }
-      renderTree(res.entries || [], res.truncated);
+      dirCache[''] = res.entries || [];
+      renderTree();
     });
   }
 
-  function renderTree(entries, truncated) {
-    treeEl.innerHTML = '';
-    if (!entries.length) {
-      treeEl.innerHTML = '<div class="kp-empty">工作区为空</div>';
-      return;
-    }
-    var root = { name: '', children: [], files: [] };
-    var map = { '': root };
-    entries.forEach(function (e) {
-      var parts = e.path.split('/');
-      var parent = root;
-      var cur = '';
-      for (var i = 0; i < parts.length; i++) {
-        cur = cur ? cur + '/' + parts[i] : parts[i];
-        // 目录条目（服务端返回 isDir）也必须建节点、绝不能进 files——
-        // 否则每个文件夹都会多出一行"幽灵文件"（点它还会报 EISDIR 错误）
-        if (i === parts.length - 1 && !e.isDir) {
-          parent.files.push({ name: parts[i], path: cur });
-        } else {
-          if (!map[cur]) {
-            var node = { name: parts[i], path: cur, children: [], files: [] };
-            map[cur] = node;
-            parent.children.push(node);
+  function nodeHtml(dirPath, depth) {
+    var entries = dirCache[dirPath] || [];
+    var html = '';
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var pad = depth * 12 + 8;
+      if (e.isDir) {
+        var open = !!expanded[e.path];
+        html += '<div class="kp-dir" style="padding-left:' + pad + 'px" data-path="' + escapeHtml(e.path) + '">' +
+          '<span class="kp-dir-arrow">' + (open ? '▾' : '▸') + '</span>' +
+          '<span class="kp-dir-name">📁 ' + escapeHtml(e.name) + '</span></div>';
+        if (open) {
+          if (dirCache[e.path] && dirCache[e.path].length === 0) {
+            html += '<div class="kp-empty" style="padding:4px 12px 4px ' + (pad + 20) + 'px">（空）</div>';
+          } else {
+            html += nodeHtml(e.path, depth + 1);
           }
-          parent = map[cur];
         }
+      } else {
+        html += '<div class="kp-file" style="padding-left:' + pad + 'px" data-path="' + escapeHtml(e.path) + '">' +
+          '<span class="kp-file-icon">' + fileIcon(e.name) + '</span>' +
+          '<span class="kp-file-name">' + escapeHtml(e.name) + '</span></div>';
       }
-    });
-
-    function nodeHtml(node, depth) {
-      var html = '';
-      node.children.forEach(function (child) {
-        html += '<div class="kp-dir" style="padding-left:' + (depth * 12 + 4) + 'px">' +
-          '<span class="kp-dir-name">📁 ' + escapeHtml(child.name) + '</span></div>';
-        html += nodeHtml(child, depth + 1);
-      });
-      node.files.forEach(function (f) {
-        html += '<div class="kp-file" style="padding-left:' + (depth * 12 + 4) + 'px" data-path="' + escapeHtml(f.path) + '">' +
-          '<span class="kp-file-icon">' + fileIcon(f.name) + '</span>' +
-          '<span class="kp-file-name">' + escapeHtml(f.name) + '</span></div>';
-      });
-      return html;
     }
+    return html;
+  }
+
+  function renderTree() {
+    if (!treeEl) return;
     // 根目录行：显示当前工作区文件夹名，明确树的根
     var rootRow = '';
     if (currentRootPath) {
@@ -608,14 +604,53 @@ function startUI(rpcCall, ctx, sessionInfo) {
       rootRow = '<div class="kp-dir kp-root" style="padding-left:4px;font-weight:700">' +
         '<span class="kp-dir-name">📁 ' + escapeHtml(rootName) + '</span></div>';
     }
-    treeEl.innerHTML = rootRow + nodeHtml(root, 0);
-    if (truncated) {
-      var tip = document.createElement('div');
-      tip.className = 'kp-empty';
-      tip.style.padding = '10px 12px';
-      tip.textContent = '⚠ 目录过深或文件过多，列表已截断';
-      treeEl.appendChild(tip);
+    treeEl.innerHTML = rootRow + nodeHtml('', 0);
+    bindTreeEvents();
+  }
+
+  function findDirRow(path) {
+    var found = null;
+    treeEl.querySelectorAll('.kp-dir[data-path]').forEach(function (el) {
+      if (el.getAttribute('data-path') === path) found = el;
+    });
+    return found;
+  }
+
+  function toggleDir(path) {
+    if (expanded[path]) {
+      expanded[path] = false;
+      renderTree();
+      return;
     }
+    expanded[path] = true;
+    renderTree();
+    if (dirCache[path]) return; // 已缓存，直接展开
+    var row = findDirRow(path);
+    if (row) {
+      var loader = document.createElement('div');
+      loader.className = 'kp-loading';
+      loader.style.padding = '6px 12px';
+      loader.textContent = '加载中…';
+      row.insertAdjacentElement('afterend', loader);
+    }
+    previewRpc('listDir', { path: path }).then(function (res) {
+      if (res.error) {
+        dirCache[path] = [];
+        expanded[path] = false;
+        console.warn('[Kaori Preview] expand failed:', res.error);
+      } else {
+        dirCache[path] = res.entries || [];
+      }
+      renderTree();
+    });
+  }
+
+  function bindTreeEvents() {
+    treeEl.querySelectorAll('.kp-dir[data-path]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        toggleDir(el.getAttribute('data-path'));
+      });
+    });
     treeEl.querySelectorAll('.kp-file').forEach(function (el) {
       el.addEventListener('click', function () {
         treeEl.querySelectorAll('.kp-file').forEach(function (x) { x.classList.remove('active'); });
